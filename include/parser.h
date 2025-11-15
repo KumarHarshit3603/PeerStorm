@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "magnet_parser.h"
+
 enum TorrentSourceType{
     TORRENT_FILE,
     MAGNET,
@@ -35,4 +37,4 @@ public:
 
 TorrentSourceType IdentifySourceType(std::string &input);
 TorrentMetadata ParseFile(std::string &path);
-void ParseMagnet(std::string &input);
+MagnetData ParseMagnet(std::string &input);

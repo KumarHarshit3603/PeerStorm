@@ -12,6 +12,7 @@ set(SOURCES
         src/parser.cpp
         src/bencode.cpp
         src/sha1.cpp
+        include/magnet_parser.h
 )
 
 # Create executable

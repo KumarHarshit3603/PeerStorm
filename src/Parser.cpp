@@ -12,6 +12,7 @@
 #include "../include/parser.h"
 #include "../include/bencode.h"
 #include "../include/sha1.h"
+#include "../include/magnet_parser.h"
 
 using namespace std;
 
@@ -267,6 +268,87 @@ TorrentMetadata ParseFile(string &path) {
     return meta;
 }
 
-void ParseMagnet(string &input) {
-    // TODO: implement magnet parsing
+MagnetData ParseMagnet(string &input) {
+ if (input.rfind("magnet:?", 0) != 0)
+        throw std::runtime_error("Not a magnet link");
+
+    std::string query = input.substr(8); // after "magnet:?"
+
+    // split params by '&'
+    std::vector<std::string> parts;
+    std::stringstream ss(query);
+    std::string part;
+
+    while (std::getline(ss, part, '&'))
+        parts.push_back(part);
+
+    // Map of key -> list of values
+    std::map<std::string, std::vector<std::string>> params;
+
+    for (auto &p : parts) {
+        auto eq = p.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        std::string key = urlDecode(p.substr(0, eq));
+        std::string value = urlDecode(p.substr(eq + 1));
+        params[key].push_back(value);
+    }
+
+    MagnetData data;
+
+    // ============ Extract xt (info-hash) ==============
+    if (!params.count("xt"))
+        throw std::runtime_error("Missing xt param");
+
+    std::string xt = params["xt"].front();
+
+    const std::string prefix = "urn:btih:";
+    if (xt.rfind(prefix, 0) != 0)
+        throw std::runtime_error("xt must start with urn:btih:");
+
+    std::string hash = xt.substr(prefix.size());
+
+    // hex (40 chars)
+    if (hash.size() == 40) {
+        data.info_hash_bytes = hexBytes(hash);
+    }
+    // base32 (32 chars)
+    else if (hash.size() == 32) {
+        data.info_hash_bytes = base32Decode(hash);
+        if (data.info_hash_bytes.size() != 20)
+            throw std::runtime_error("Base32 decode failure");
+    } else {
+        throw std::runtime_error("Invalid info-hash format");
+    }
+
+    data.info_hash_hex = toHex(data.info_hash_bytes);
+
+    // ============ Extract dn ==============
+    if (params.count("dn"))
+        data.display_name = params["dn"].front();
+
+    // ============ Extract trackers ==============
+    if (params.count("tr"))
+        data.trackers = params["tr"];
+
+    // ============ Extract web seeds (ws) ==============
+    if (params.count("ws"))
+        data.web_seeds = params["ws"];
+
+    // ============ Extract file size (xl) ==============
+    if (params.count("xl"))
+        data.file_size = std::stoll(params["xl"].front());
+
+    // ============ Store unknown params ==============
+    for (auto &kv : params) {
+        if (kv.first == "xt" || kv.first == "dn" || kv.first == "tr" ||
+            kv.first == "ws" || kv.first == "xl")
+            continue;
+
+        data.extra_params[kv.first] = kv.second;
+    }
+
+    return data;
+
 }

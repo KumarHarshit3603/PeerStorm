@@ -4,6 +4,7 @@
 #include "include/parser.h"
 #include "include/bencode.h"
 #include "include/sha1.h"
+#include "include/magnet_parser.h"
 using namespace std;
 
 void printTorrentMetadata(const TorrentMetadata& meta) {
@@ -39,7 +40,11 @@ void printTorrentMetadata(const TorrentMetadata& meta) {
         printf("%02x", byte);
     cout << endl;
 }
-
+void printMagnetdata(const MagnetData& magdata ){
+    cout<<"info hash hex"<<magdata.info_hash_hex<<endl;
+    cout<<"trackers:"<<magdata.trackers.size()<<endl;
+    cout<<"web seeds:"<<magdata.web_seeds.size()<<endl;
+}
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         cerr << "Usage: " << argv[0] << " add-torrent <torrent path or magnet link>" << endl;
@@ -61,7 +66,10 @@ int main(int argc, char* argv[]) {
         TorrentMetadata meta = ParseFile(input);
         printTorrentMetadata(meta);
     } else if (type == MAGNET) {
-        cout << "Magnet link parsing not implemented yet" << endl;
+        cout << "deciphering magnet link:"<<input << endl;
+        MagnetData magdata = ParseMagnet(input);
+        printMagnetdata(magdata);
+
     } else {
         cerr << "Invalid input" << endl;
     }
