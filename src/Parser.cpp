@@ -1,11 +1,14 @@
+// src/Parser.cpp
 #include <fstream>
 #include <iostream>
-#include <fstream>
 #include <string>
 #include <chrono>
 #include <ctime>
 #include <sstream>
 #include <iomanip>
+#include <vector>
+#include <stdexcept>
+
 #include "../include/parser.h"
 #include "../include/bencode.h"
 #include "../include/sha1.h"
@@ -31,24 +34,175 @@ std::string unixTimestampToLocalTime(long long timestamp) {
     auto time_point = system_clock::time_point(seconds(timestamp));
     std::time_t time = system_clock::to_time_t(time_point);
     std::tm* local_tm = std::localtime(&time);
-
+    if (!local_tm) return "Invalid timestamp";
     std::ostringstream oss;
     oss << std::put_time(local_tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
 }
 
+// ------------------------------
+// Byte-oriented bencode walker (mirrors your working BencodeParser logic)
+// It only finds the raw start/end of the bencoded "info" value.
+// ------------------------------
+static bool parseValueBytes(const std::vector<unsigned char>& data, size_t &pos);
+
+static bool parseStringBytes(const std::vector<unsigned char>& data, size_t &pos) {
+    size_t n = data.size();
+    if (pos >= n || !('0' <= data[pos] && data[pos] <= '9')) return false;
+    size_t len = 0;
+    while (pos < n && data[pos] >= '0' && data[pos] <= '9') {
+        len = len * 10 + (data[pos] - '0');
+        pos++;
+    }
+    if (pos >= n || data[pos] != ':') return false;
+    pos++; // skip ':'
+    if (pos + len > n) return false;
+    pos += len;
+    return true;
+}
+
+static bool parseIntegerBytes(const std::vector<unsigned char>& data, size_t &pos) {
+    size_t n = data.size();
+    if (pos >= n || data[pos] != 'i') return false;
+    pos++; // skip 'i'
+    while (pos < n && data[pos] != 'e') pos++;
+    if (pos >= n || data[pos] != 'e') return false;
+    pos++; // skip 'e'
+    return true;
+}
+
+static bool parseListBytes(const std::vector<unsigned char>& data, size_t &pos) {
+    size_t n = data.size();
+    if (pos >= n || data[pos] != 'l') return false;
+    pos++; // skip 'l'
+    while (pos < n && data[pos] != 'e') {
+        if (!parseValueBytes(data, pos)) return false;
+    }
+    if (pos >= n || data[pos] != 'e') return false;
+    pos++; // skip 'e'
+    return true;
+}
+
+static bool parseDictBytes(const std::vector<unsigned char>& data, size_t &pos) {
+    size_t n = data.size();
+    if (pos >= n || data[pos] != 'd') return false;
+    pos++; // skip 'd'
+    while (pos < n && data[pos] != 'e') {
+        // parse key (must be a string length:...)
+        if (!parseStringBytes(data, pos)) return false;
+        // parse value
+        if (!parseValueBytes(data, pos)) return false;
+    }
+    if (pos >= n || data[pos] != 'e') return false;
+    pos++; // skip 'e'
+    return true;
+}
+
+static bool parseValueBytes(const std::vector<unsigned char>& data, size_t &pos) {
+    if (pos >= data.size()) return false;
+    unsigned char t = data[pos];
+    if (t >= '0' && t <= '9') return parseStringBytes(data, pos);
+    if (t == 'i') return parseIntegerBytes(data, pos);
+    if (t == 'l') return parseListBytes(data, pos);
+    if (t == 'd') return parseDictBytes(data, pos);
+    if (t == 'e') { pos++; return true; } // should rarely be used here
+    return false;
+}
+
+// This function mirrors your working parser's findInfoDictionary logic.
+// It returns true and sets [out_start, out_end) to the raw bencoded bytes of the value for "info".
+static bool findInfoRangeFromBytes(const std::vector<unsigned char>& data, size_t &out_start, size_t &out_end) {
+    out_start = out_end = static_cast<size_t>(-1);
+    size_t n = data.size();
+    if (n == 0) return false;
+    if (data[0] != 'd') return false;
+
+    size_t pos = 0;
+    // Expect root dict
+    if (data[pos++] != 'd') return false;
+
+    // iterate root dict keys
+    while (pos < n && data[pos] != 'e') {
+        // key must be a string: <len>:<key>
+        if (pos >= n || data[pos] < '0' || data[pos] > '9') return false;
+        size_t key_len = 0;
+        while (pos < n && data[pos] >= '0' && data[pos] <= '9') {
+            key_len = key_len * 10 + (data[pos] - '0');
+            pos++;
+        }
+        if (pos >= n || data[pos] != ':') return false;
+        pos++; // skip ':'
+        if (pos + key_len > n) return false;
+        std::string key;
+        key.reserve(key_len);
+        for (size_t i = 0; i < key_len; ++i) {
+            key.push_back(static_cast<char>(data[pos++]));
+        }
+
+        if (key == "info") {
+            // start of info value is current pos
+            size_t start_pos = pos;
+            if (!parseValueBytes(data, pos)) return false;
+            size_t end_pos = pos;
+            out_start = start_pos;
+            out_end = end_pos;
+            return true;
+        } else {
+            // skip the value for this key
+            if (!parseValueBytes(data, pos)) return false;
+        }
+    }
+
+    return false;
+}
+
+// ------------------------------
+// ParseFile implementation
+// ------------------------------
 TorrentMetadata ParseFile(string &path) {
     TorrentMetadata meta;
 
-    // --- Read file ---
+    // --- Read file into raw vector of bytes ---
     ifstream file(path, ios::binary);
-    if (!file)
-        throw runtime_error("Cannot open .torrent file");
+    if (!file) throw runtime_error("Cannot open .torrent file");
 
-    string data((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
+    // read into vector<unsigned char>
+    std::vector<unsigned char> raw;
+    file.seekg(0, ios::end);
+    std::streampos fsize = file.tellg();
+    if (fsize <= 0) throw runtime_error("Empty or invalid file size");
+    raw.resize(static_cast<size_t>(fsize));
+    file.seekg(0, ios::beg);
+    if (!file.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size())))
+        throw runtime_error("Error reading file");
+
+    // --- Find raw info slice using byte-walker that mirrors your working code ---
+    size_t info_start = static_cast<size_t>(-1);
+    size_t info_end = static_cast<size_t>(-1);
+    if (!findInfoRangeFromBytes(raw, info_start, info_end)) {
+        throw runtime_error("Could not locate 'info' dictionary in torrent (byte-scan failed)");
+    }
+    if (info_start >= info_end || info_end > raw.size()) {
+        throw runtime_error("Invalid info byte range found");
+    }
+
+    // Extract raw bytes slice for hashing
+    // Use a vector<uint8_t> to preserve raw bytes exactly (no std::string conversion)
+    std::vector<uint8_t> info_bytes;
+    info_bytes.reserve(info_end - info_start);
+    info_bytes.insert(info_bytes.end(), raw.begin() + info_start, raw.begin() + info_end);
+
+    // Compute SHA1 over the raw byte vector using sha1_bytes (added below)
+    meta.info_hash = sha1_bytes(info_bytes);
+
+
+    // --- Now decode the full file into BValue for the rest of metadata ---
+    // convert raw to std::string for existing decoder functions
+    std::string data_str;
+    data_str.assign(reinterpret_cast<const char*>(raw.data()), raw.size());
 
     size_t pos = 0;
-    BValue root = decodeValue(data, pos);
+    BValue root = decodeValue(data_str, pos);
     const BDict &dict = root.asDict();
 
     // --- Basic fields ---
@@ -72,16 +226,20 @@ TorrentMetadata ParseFile(string &path) {
     if (dict.count("comment"))
         meta.comment = dict.at("comment").asString();
 
-    // --- INFO DICTIONARY ---
-    const BValue &info_bvalue = dict.at("info");
+    // --- INFO DICTIONARY (parsed struct) ---
+    const BValue &info_bvalue = dict.at("info"); // parsed object
     const BDict &info = info_bvalue.asDict();
 
-    meta.name = info.at("name").asString();
-    meta.piece_length = info.at("piece length").asInt();
+    // fill metadata fields from parsed info
+    if (info.count("name")) meta.name = info.at("name").asString();
+    if (info.count("piece length")) meta.piece_length = info.at("piece length").asInt();
 
-    string pieces_str = info.at("pieces").asString();
-    meta.pieces.assign(pieces_str.begin(), pieces_str.end());
-    meta.piece_count = meta.pieces.size() / 20;
+    // Pieces
+    if (info.count("pieces")) {
+        string pieces_str = info.at("pieces").asString();
+        meta.pieces.assign(pieces_str.begin(), pieces_str.end());
+        meta.piece_count = meta.pieces.size() / 20;
+    }
 
     // MULTI-FILE MODE
     if (info.count("files")) {
@@ -91,27 +249,24 @@ TorrentMetadata ParseFile(string &path) {
             f.length = fd.at("length").asInt();
             for (auto &p : fd.at("path").asList())
                 f.path.push_back(p.asString());
+
             meta.total_size += f.length;
             meta.files.push_back(f);
         }
     } else {
-        TorrentDataFile f;
-        f.length = info.at("length").asInt();
-        f.path.push_back(meta.name);
-        meta.total_size = f.length;
-        meta.files.push_back(f);
+        // SINGLE-FILE
+        if (info.count("length")) {
+            TorrentDataFile f;
+            f.length = info.at("length").asInt();
+            f.path.push_back(meta.name);
+            meta.total_size = f.length;
+            meta.files.push_back(f);
+        }
     }
-
-    // --- CORRECT INFO-HASH ---
-    size_t info_start = info_bvalue.raw_start;
-    size_t info_end   = info_bvalue.raw_end;
-
-    std::string info_raw = data.substr(info_start, info_end - info_start);
-    meta.info_hash = sha1(info_raw);
 
     return meta;
 }
 
 void ParseMagnet(string &input) {
-    // TODO
+    // TODO: implement magnet parsing
 }

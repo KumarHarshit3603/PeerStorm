@@ -65,6 +65,5 @@ int main(int argc, char* argv[]) {
     } else {
         cerr << "Invalid input" << endl;
     }
-
     return 0;
 }

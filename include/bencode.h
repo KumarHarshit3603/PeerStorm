@@ -3,7 +3,9 @@
 #include <vector>
 #include <map>
 #include <stdexcept>
+#include <cstddef>
 
+// Forward declare BValue
 class BValue;
 
 // --- Bencode Containers ---
@@ -22,6 +24,9 @@ class BValue {
 public:
     BType type = BType::NONE;
 
+    // NOTE: these fields exist in your current code but we will not rely on them
+    // for computing the info-hash. The parser will use findInfoValueRange()
+    // to get the exact raw slice.
     size_t raw_start = 0;
     size_t raw_end   = 0;
 
@@ -73,6 +78,12 @@ std::string decodeString(const std::string& data, size_t& pos);
 BList decodeList(const std::string& data, size_t& pos);
 BDict decodeDict(const std::string& data, size_t& pos);
 std::string bencode_value(const BValue &v);
-
 void skipBencodeValue(const std::string& data, size_t& pos);
+
+// Find the raw byte-range (start, end) of the bencoded "info" value inside a
+// torrent file represented by `data`. Returns pair(start,end) where `start`
+// points to the first byte of the info value (usually the 'd' if it's a dict)
+// and `end` points just after the final 'e' that terminates the value.
+//
+// Throws runtime_error on malformed bencode or if not found.
 std::pair<size_t, size_t> findInfoValueRange(const std::string& data);
