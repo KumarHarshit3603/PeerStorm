@@ -1,58 +1,48 @@
 # **PeerStorm – A Modern BitTorrent Client (In Development)**
 ![PeerStorm Logo](assets/logo.png)
 
-PeerStorm is a modern, lightweight BitTorrent client written in **C++17**.  
-Its goal is to fully support:
-- `.torrent` file parsing  
-- Magnet link parsing  
-- Bencode decoding  
-- Info dictionary hashing  
-- CLI-based metadata display  
+PeerStorm is a **serious, low-level BitTorrent client** written in **modern C++17**, built from scratch to deeply understand and implement the BitTorrent protocol stack.
 
-⚠️ **Note:** PeerStorm is currently **in heavy development** and is **NOT a usable torrent client yet**.  
-Right now, only metadata parsing and hashing are implemented.
+The project focuses on **correctness, protocol-level clarity, and extensibility**, rather than being a quick wrapper around existing libraries.
+
+⚠️ **IMPORTANT:** PeerStorm is still **under active development** and is **not yet a complete downloader**.  
+However, tracker communication is now partially functional.
 
 ---
 
-## 🚀 Features (Current)
+## 🚀 Features (Implemented)
 
-✔️ Bencode decoder  
-✔️ `.torrent` file parser  
-✔️ Extracts and displays torrent metadata  
-✔️ SHA-1 hashing support  
-✔️ infohash calculation  
-✔️ Cross-platform C++17  
-✔️ Simple CLI interface  
+### ✅ Core
+- Bencode decoder (fully functional)
+- `.torrent` file parser
+- Torrent metadata extraction
+- Info dictionary hashing (SHA-1)
+- Magnet hash compatibility
+- Clean CLI-based metadata display
+- Cross-platform C++17 codebase
 
----
-
-## 🛠️ Project Status
-
-This repository is **work in progress**.  
-The code currently allows you to:
-
-- Load a `.torrent` file  
-- Decode the bencode structure  
-- Extract metadata  
-- Compute SHA-1 / SHA-256 / hybrid infohash  
-
-**Currently being developed:**
-
-- Tracker communication  
-- Peer-to-peer protocol  
-- Piece downloading logic  
-- DHT support  
-- File storage engine  
+### ✅ Tracker Support (NEW)
+- **HTTP tracker announce support**
+- **UDP tracker announce support**
+- Compact peer list parsing
+- Multiple trackers from `announce-list`
+- Verbose debug output for tracker communication
+- Windows Winsock networking support
 
 ---
 
-## 🔧 Build Instructions
+## 🧪 What Works Right Now
 
-### **Prerequisites**
-- C++17 compiler (GCC, Clang, or MSVC)
-- CMake (optional but recommended)
-- Make/Ninja or IDE like CLion / VS Code
+You can currently:
 
-### **Build using g++**
-```sh
-g++ -std=c++17 -Iinclude main.cpp src/parser.cpp src/bencode.cpp src/sha1.cpp -o PeerStorm
+- Load a `.torrent` file
+- Decode and inspect its bencode structure
+- View torrent metadata (files, size, pieces, trackers)
+- Compute and display the info-hash
+- Contact **HTTP trackers**
+- Contact **UDP trackers**
+- Receive and parse **peer lists**
+
+Example:
+```bash
+PeerStorm add-torrent example.torrent
