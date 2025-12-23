@@ -18,6 +18,8 @@ set(SOURCES
         include/peer_id.h
         src/peer_id.cpp
         src/tracker_http.cpp
+        include/tracker_udp.h
+        src/tracker_udp.cpp
 )
 
 # Create executable

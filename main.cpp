@@ -9,6 +9,7 @@
 #include "include/sha1.h"
 #include "include/tracker_http.h"
 #include "include/magnet_parser.h"
+#include "include/tracker_udp.h"
 using namespace std;
 
 #include <vector>
@@ -81,22 +82,40 @@ int main(int argc, char* argv[]) {
         cout << "Loading torrent file: " << input << endl;
         TorrentMetadata meta = ParseFile(input);
         printTorrentMetadata(meta);
-        cout<<peerId;
+        cout<<peerId<<endl;
 
 
         std::vector<Peer> allPeers;
         set<std::string> seen; // to avoid duplicates
 
+        cout<<meta.announce_list.size();
         for (const auto& tracker : meta.announce_list) {
-            auto peers = announceHTTP(tracker, infoHashToString(meta.info_hash), peerId, meta.total_size);
+            std::vector<Peer> peers;
+
+            if (tracker.rfind("udp://", 0) == 0) {
+                peers = announceUDP(
+                    tracker,
+                    infoHashToString(meta.info_hash),
+                    peerId,
+                    meta.total_size
+                );
+            }
+            else if (tracker.rfind("http://", 0) == 0) {
+                peers = announceHTTP(
+                    tracker,
+                    infoHashToString(meta.info_hash),
+                    peerId,
+                    meta.total_size
+                );
+            }
+
             for (const auto& p : peers) {
                 std::string key = p.ip + ":" + std::to_string(p.port);
-                if (seen.find(key) == seen.end()) {
+                if (seen.insert(key).second)
                     allPeers.push_back(p);
-                    seen.insert(key);
-                }
             }
         }
+
 
         std::cout << "Total peers collected: " << allPeers.size() << "\n";
         for (const auto& p : allPeers) {
