@@ -13,6 +13,11 @@ set(SOURCES
         src/bencode.cpp
         src/sha1.cpp
         include/magnet_parser.h
+        include/peer.h
+        include/tracker_http.h
+        include/peer_id.h
+        src/peer_id.cpp
+        src/tracker_http.cpp
 )
 
 # Create executable

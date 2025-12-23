@@ -1,9 +1,12 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "include/peer_id.h"
 #include "include/parser.h"
 #include "include/bencode.h"
 #include "include/sha1.h"
+#include "include/tracker_http.h"
 #include "include/magnet_parser.h"
 using namespace std;
 
@@ -60,11 +63,13 @@ int main(int argc, char* argv[]) {
     }
 
     TorrentSourceType type = IdentifySourceType(input);
-
+    std::string peerId = generatePeerId();
     if (type == TORRENT_FILE) {
         cout << "Loading torrent file: " << input << endl;
         TorrentMetadata meta = ParseFile(input);
         printTorrentMetadata(meta);
+        cout<<peerId;
+
     } else if (type == MAGNET) {
         cout << "deciphering magnet link:"<<input << endl;
         MagnetData magdata = ParseMagnet(input);
