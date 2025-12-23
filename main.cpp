@@ -1,4 +1,5 @@
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,17 @@
 #include "include/tracker_http.h"
 #include "include/magnet_parser.h"
 using namespace std;
+
+#include <vector>
+#include <string>
+#include <cstdint>
+
+std::string infoHashToString(const std::vector<uint8_t>& infoHash) {
+    return std::string(
+        reinterpret_cast<const char*>(infoHash.data()),
+        infoHash.size()
+    );
+}
 
 void printTorrentMetadata(const TorrentMetadata& meta) {
     cout << "=== Torrent Information ===" << endl;
@@ -42,6 +54,7 @@ void printTorrentMetadata(const TorrentMetadata& meta) {
     for (auto byte : meta.info_hash)
         printf("%02x", byte);
     cout << endl;
+    cout<<infoHashToString(meta.info_hash)<<endl;
 }
 void printMagnetdata(const MagnetData& magdata ){
     cout<<"info hash hex"<<magdata.info_hash_hex<<endl;
@@ -69,6 +82,28 @@ int main(int argc, char* argv[]) {
         TorrentMetadata meta = ParseFile(input);
         printTorrentMetadata(meta);
         cout<<peerId;
+
+
+        std::vector<Peer> allPeers;
+        set<std::string> seen; // to avoid duplicates
+
+        for (const auto& tracker : meta.announce_list) {
+            auto peers = announceHTTP(tracker, infoHashToString(meta.info_hash), peerId, meta.total_size);
+            for (const auto& p : peers) {
+                std::string key = p.ip + ":" + std::to_string(p.port);
+                if (seen.find(key) == seen.end()) {
+                    allPeers.push_back(p);
+                    seen.insert(key);
+                }
+            }
+        }
+
+        std::cout << "Total peers collected: " << allPeers.size() << "\n";
+        for (const auto& p : allPeers) {
+            std::cout << p.ip << ":" << p.port << "\n";
+        }
+
+
 
     } else if (type == MAGNET) {
         cout << "deciphering magnet link:"<<input << endl;
