@@ -20,6 +20,10 @@ set(SOURCES
         src/tracker_http.cpp
         include/tracker_udp.h
         src/tracker_udp.cpp
+        include/peer_handshake.h
+        src/peer_handshake.cpp
+        include/peer_connection.h
+        src/peer_connection.cpp
 )
 
 # Create executable

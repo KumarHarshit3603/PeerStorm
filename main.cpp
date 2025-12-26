@@ -2,6 +2,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <windows.h>
 
 #include "include/peer_id.h"
 #include "include/parser.h"
@@ -10,6 +11,8 @@
 #include "include/tracker_http.h"
 #include "include/magnet_parser.h"
 #include "include/tracker_udp.h"
+#include "include/peer_connection.h"
+#include "include/peer_handshake.h"
 using namespace std;
 
 #include <vector>
@@ -63,6 +66,17 @@ void printMagnetdata(const MagnetData& magdata ){
     cout<<"web seeds:"<<magdata.web_seeds.size()<<endl;
 }
 int main(int argc, char* argv[]) {
+    WSADATA wsa;
+    int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    if (wsaResult != 0) {
+        std::cerr << "WSAStartup failed with error: " << wsaResult << "\n";
+        return 1;
+    }
+
+    std::cout << "Winsock initialized successfully\n";
+
+
     if (argc < 3) {
         cerr << "Usage: " << argv[0] << " add-torrent <torrent path or magnet link>" << endl;
         return 1;
@@ -123,6 +137,11 @@ int main(int argc, char* argv[]) {
         }
 
 
+        auto handshake = buildHandshake(infoHashToString(meta.info_hash), peerId);
+
+        for (const auto& p : allPeers) {
+            connectToPeer(p.ip, p.port, handshake);
+        }
 
     } else if (type == MAGNET) {
         cout << "deciphering magnet link:"<<input << endl;
@@ -132,5 +151,7 @@ int main(int argc, char* argv[]) {
     } else {
         cerr << "Invalid input" << endl;
     }
+    WSACleanup();
     return 0;
 }
+
