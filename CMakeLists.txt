@@ -24,6 +24,12 @@ set(SOURCES
         src/peer_handshake.cpp
         include/peer_connection.h
         src/peer_connection.cpp
+        include/peer_state_machine.h
+        src/peer_state_machine.cpp
+        include/bt_messages.h
+        src/bt_messages.cpp
+        include/piece_manager.h
+        src/piece_manager.cpp
 )
 
 # Create executable
