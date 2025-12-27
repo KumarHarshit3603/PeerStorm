@@ -1,30 +1,37 @@
 #pragma once
-
-#include <winsock2.h>
 #include <string>
+#include <winsock2.h>
 #include "piece_manager.h"
 
 class PeerStateMachine {
 public:
     PeerStateMachine(
         const std::string& ip,
-        uint16_t port,
+        int port,
         SOCKET sock,
-        PieceManager* pm
+        PieceManager* pieceManager
     );
 
     void start();
 
 private:
-    std::string ip;
-    uint16_t port;
-    SOCKET sock;
-    bool choked;
-    PieceManager* pieceManager;
+    enum class State {
+        HANDSHAKE,
+        WAIT_BITFIELD,
+        SEND_INTERESTED,
+        WAIT_UNCHOKE,
+        RUNNING,
+        DEAD
+    };
 
-    bool receiveBitfield();
-    void sendInterested();
-    bool waitForUnchoke();
-    void requestPiece(int index);
-    bool receivePiece(int index);
+    std::string ip;
+    int port;
+    SOCKET sock;
+    PieceManager* pieceManager;
+    State state;
+
+    bool recvAll(char* buf, int len);
+    bool recvMessage(uint8_t& id, std::vector<uint8_t>& payload);
+    bool sendInterested();
+    bool handleMessage(uint8_t id, const std::vector<uint8_t>& payload);
 };
