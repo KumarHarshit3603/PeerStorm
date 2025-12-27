@@ -1,13 +1,19 @@
 #include "../include/peer_state_machine.h"
 #include "../include/bt_messages.h"
-#include <iostream>
+#include <vector>
 
-Peer::Peer(const std::string& ip, uint16_t port, PieceManager* pm)
-    : ip(ip), port(port), sock(INVALID_SOCKET),
-      choked(true), pieceManager(pm) {}
+PeerStateMachine::PeerStateMachine(
+    const std::string& ip,
+    uint16_t port,
+    SOCKET sock,
+    PieceManager* pm
+) : ip(ip),
+    port(port),
+    sock(sock),
+    choked(true),
+    pieceManager(pm) {}
 
-void Peer::start() {
-    // socket already created + handshake done earlier
+void PeerStateMachine::start() {
     if (!receiveBitfield()) return;
 
     sendInterested();
@@ -25,30 +31,26 @@ void Peer::start() {
     }
 }
 
-bool Peer::receiveBitfield() {
+bool PeerStateMachine::receiveBitfield() {
     uint8_t buf[4096];
     int r = recv(sock, (char*)buf, sizeof(buf), 0);
     if (r <= 0) return false;
 
-    std::vector<uint8_t> data(buf, buf + r);
-    BTMessage msg = parseMessage(data);
-
+    auto msg = parseMessage({buf, buf + r});
     return msg.type == BTMessageType::BITFIELD;
 }
 
-void Peer::sendInterested() {
-    uint8_t msg[5] = {0,0,0,1,2};
+void PeerStateMachine::sendInterested() {
+    uint8_t msg[5] = {0, 0, 0, 1, 2};
     send(sock, (char*)msg, 5, 0);
 }
 
-bool Peer::waitForUnchoke() {
+bool PeerStateMachine::waitForUnchoke() {
     uint8_t buf[1024];
     int r = recv(sock, (char*)buf, sizeof(buf), 0);
     if (r <= 0) return false;
 
-    std::vector<uint8_t> data(buf, buf + r);
-    BTMessage msg = parseMessage(data);
-
+    auto msg = parseMessage({buf, buf + r});
     if (msg.type == BTMessageType::UNCHOKE) {
         choked = false;
         return true;
@@ -56,7 +58,7 @@ bool Peer::waitForUnchoke() {
     return false;
 }
 
-void Peer::requestPiece(int index) {
+void PeerStateMachine::requestPiece(int index) {
     uint8_t msg[17] = {0,0,0,13,6};
     msg[5] = (index >> 24) & 0xFF;
     msg[6] = (index >> 16) & 0xFF;
@@ -65,12 +67,8 @@ void Peer::requestPiece(int index) {
     send(sock, (char*)msg, 17, 0);
 }
 
-bool Peer::receivePiece(int index) {
+bool PeerStateMachine::receivePiece(int index) {
     uint8_t buf[16384];
     int r = recv(sock, (char*)buf, sizeof(buf), 0);
-    if (r <= 0) return false;
-
-    std::cout << "Received piece " << index
-              << " from " << ip << "\n";
-    return true;
+    return r > 0;
 }

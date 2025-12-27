@@ -2,6 +2,11 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
+
+#include <winsock2.h>
 #include <windows.h>
 
 #include "include/peer_id.h"
@@ -13,12 +18,15 @@
 #include "include/tracker_udp.h"
 #include "include/peer_connection.h"
 #include "include/peer_handshake.h"
+#include "include/piece_manager.h"
+#include "include/peer_state_machine.h"
+
 using namespace std;
 
-#include <vector>
-#include <string>
-#include <cstdint>
+constexpr size_t MAX_ACTIVE_PEERS = 40;
+std::mutex coutMutex;
 
+/* Convert 20-byte info-hash to raw string (binary safe) */
 std::string infoHashToString(const std::vector<uint8_t>& infoHash) {
     return std::string(
         reinterpret_cast<const char*>(infoHash.data()),
@@ -27,84 +35,73 @@ std::string infoHashToString(const std::vector<uint8_t>& infoHash) {
 }
 
 void printTorrentMetadata(const TorrentMetadata& meta) {
-    cout << "=== Torrent Information ===" << endl;
-    cout << "Name: " << meta.name << endl;
-    cout << "Announce: " << meta.announce << endl;
+    cout << "=== Torrent Information ===\n";
+    cout << "Name: " << meta.name << "\n";
+    cout << "Announce: " << meta.announce << "\n";
 
     if (!meta.announce_list.empty()) {
-        cout << "Announce List:" << endl;
-        for (auto &tracker : meta.announce_list)
-            cout << "  - " << tracker << endl;
+        cout << "Announce List:\n";
+        for (const auto& t : meta.announce_list)
+            cout << "  - " << t << "\n";
     }
 
-    cout << "Created by: " << meta.created_by << endl;
-    cout << "Unix timestamp: " << meta.Unix_timestamp << endl;
-    cout << "Creation date: " << meta.creation_date << endl;
-    cout << "Comment: " << meta.comment << endl;
-    cout << "Piece length: " << meta.piece_length << endl;
-    cout << "Total pieces: " << meta.piece_count << endl;
-    cout << "Total size: " << meta.total_size << " bytes" << endl;
+    cout << "Piece length: " << meta.piece_length << "\n";
+    cout << "Total pieces: " << meta.piece_count << "\n";
+    cout << "Total size: " << meta.total_size << " bytes\n";
 
-    if (!meta.files.empty()) {
-        cout << "Files:" << endl;
-        for (auto &f : meta.files) {
-            cout << "  - Path: ";
-            for (auto &p : f.path) cout << p << "/";
-            cout << " | Size: " << f.length << " bytes" << endl;
-        }
-    }
+    cout << "Info hash (hex): ";
+    for (uint8_t b : meta.info_hash)
+        printf("%02x", b);
+    cout << "\n";
+}
 
-    cout << "Info hash (SHA1): ";
-    for (auto byte : meta.info_hash)
-        printf("%02x", byte);
-    cout << endl;
-    cout<<infoHashToString(meta.info_hash)<<endl;
+void printMagnetData(const MagnetData& mag) {
+    cout << "Info hash (hex): " << mag.info_hash_hex << "\n";
+    cout << "Trackers: " << mag.trackers.size() << "\n";
+    cout << "Web seeds: " << mag.web_seeds.size() << "\n";
 }
-void printMagnetdata(const MagnetData& magdata ){
-    cout<<"info hash hex"<<magdata.info_hash_hex<<endl;
-    cout<<"trackers:"<<magdata.trackers.size()<<endl;
-    cout<<"web seeds:"<<magdata.web_seeds.size()<<endl;
-}
+
 int main(int argc, char* argv[]) {
-    WSADATA wsa;
-    int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsa);
 
-    if (wsaResult != 0) {
-        std::cerr << "WSAStartup failed with error: " << wsaResult << "\n";
+    /* ---------------- Winsock Init ---------------- */
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        cerr << "WSAStartup failed\n";
         return 1;
     }
 
-    std::cout << "Winsock initialized successfully\n";
-
-
     if (argc < 3) {
-        cerr << "Usage: " << argv[0] << " add-torrent <torrent path or magnet link>" << endl;
+        cerr << "Usage: " << argv[0]
+             << " add-torrent <torrent file | magnet link>\n";
+        WSACleanup();
         return 1;
     }
 
     string command = argv[1];
-    string input = argv[2];
+    string input   = argv[2];
 
     if (command != "add-torrent") {
-        cerr << "Unknown command: " << command << endl;
+        cerr << "Unknown command\n";
+        WSACleanup();
         return 1;
     }
 
     TorrentSourceType type = IdentifySourceType(input);
-    std::string peerId = generatePeerId();
+    string peerId = generatePeerId();
+
+    /* =====================================================
+       =============== TORRENT FILE =========================
+       ===================================================== */
     if (type == TORRENT_FILE) {
-        cout << "Loading torrent file: " << input << endl;
+
         TorrentMetadata meta = ParseFile(input);
         printTorrentMetadata(meta);
-        cout<<peerId<<endl;
 
+        vector<Peer> allPeers;
+        set<string> seen;
 
-        std::vector<Peer> allPeers;
-        set<std::string> seen; // to avoid duplicates
-
-        cout<<meta.announce_list.size();
         for (const auto& tracker : meta.announce_list) {
-            std::vector<Peer> peers;
+            vector<Peer> peers;
 
             if (tracker.rfind("udp://", 0) == 0) {
                 peers = announceUDP(
@@ -124,34 +121,92 @@ int main(int argc, char* argv[]) {
             }
 
             for (const auto& p : peers) {
-                std::string key = p.ip + ":" + std::to_string(p.port);
+                string key = p.ip + ":" + to_string(p.port);
                 if (seen.insert(key).second)
                     allPeers.push_back(p);
             }
         }
 
-
-        std::cout << "Total peers collected: " << allPeers.size() << "\n";
-        for (const auto& p : allPeers) {
-            std::cout << p.ip << ":" << p.port << "\n";
+        {
+            lock_guard<mutex> lock(coutMutex);
+            cout << "Total peers collected: "
+                 << allPeers.size() << "\n";
         }
 
+        /* ---------------- Piece Manager ---------------- */
+        PieceManager pieceManager(meta.piece_count);
 
-        auto handshake = buildHandshake(infoHashToString(meta.info_hash), peerId);
+        /* ---------------- Peer Threads ---------------- */
+        vector<thread> peerThreads;
+        atomic<int> activePeers{0};
+
+        auto handshake = buildHandshake(
+            infoHashToString(meta.info_hash),
+            peerId
+        );
 
         for (const auto& p : allPeers) {
-            connectToPeer(p.ip, p.port, handshake);
+            peerThreads.emplace_back([&, p]() {
+
+                int prev = activePeers.fetch_add(1);
+                if (prev >= MAX_ACTIVE_PEERS) {
+                    activePeers--;
+                    return;
+                }
+
+                SOCKET sock = connectToPeer(
+                    p.ip,
+                    p.port,
+                    handshake
+                );
+
+                if (sock == INVALID_SOCKET) {
+                    {
+                        lock_guard<mutex> lock(coutMutex);
+                        cout << "Connection failed: "
+                             << p.ip << ":" << p.port << "\n";
+                    }
+                    activePeers--;
+                    return;
+                }
+
+                {
+                    lock_guard<mutex> lock(coutMutex);
+                    cout << "[+] Connected: "
+                         << p.ip << ":" << p.port << "\n";
+                }
+
+                PeerStateMachine psm(
+                    p.ip,
+                    p.port,
+                    sock,
+                    &pieceManager
+                );
+
+                psm.start();
+
+                closesocket(sock);
+                activePeers--;
+            });
         }
 
-    } else if (type == MAGNET) {
-        cout << "deciphering magnet link:"<<input << endl;
-        MagnetData magdata = ParseMagnet(input);
-        printMagnetdata(magdata);
-
-    } else {
-        cerr << "Invalid input" << endl;
+        for (auto& t : peerThreads) {
+            if (t.joinable())
+                t.join();
+        }
     }
+
+    /* =====================================================
+       ================= MAGNET LINK ========================
+       ===================================================== */
+    else if (type == MAGNET) {
+        MagnetData mag = ParseMagnet(input);
+        printMagnetData(mag);
+    }
+    else {
+        cerr << "Invalid input\n";
+    }
+
     WSACleanup();
     return 0;
 }
-

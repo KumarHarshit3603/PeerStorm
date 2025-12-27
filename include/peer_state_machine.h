@@ -1,12 +1,17 @@
 #pragma once
-#include <string>
-#include <vector>
+
 #include <winsock2.h>
+#include <string>
 #include "piece_manager.h"
 
-class Peer {
+class PeerStateMachine {
 public:
-    Peer(const std::string& ip, uint16_t port, PieceManager* pm);
+    PeerStateMachine(
+        const std::string& ip,
+        uint16_t port,
+        SOCKET sock,
+        PieceManager* pm
+    );
 
     void start();
 
