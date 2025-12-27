@@ -134,7 +134,11 @@ int main(int argc, char* argv[]) {
         }
 
         /* ---------------- Piece Manager ---------------- */
-        PieceManager pieceManager(meta.piece_count);
+        PieceManager pieceManager(
+    static_cast<int>(meta.piece_count),
+    static_cast<int>(meta.piece_length)
+);
+
 
         /* ---------------- Peer Threads ---------------- */
         vector<thread> peerThreads;
