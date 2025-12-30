@@ -1,40 +1,23 @@
 #pragma once
 #include <vector>
 #include <mutex>
-#include <set>
-#include <unordered_map>
-
-struct BlockRequest {
-    int pieceIndex;
-    int offset;
-    int length;
-};
+#include <string>
 
 class PieceManager {
 public:
     PieceManager(int totalPieces, int pieceLength);
 
-    // Called by worker to pick next block request
-    bool getNextBlock(BlockRequest &req);
+    int getNextPiece(const std::vector<bool>& peerBitfield);
+    void storeBlock(int piece, int offset, const std::vector<char>& data);
 
-    // Called when a block arrives
-    void storeBlock(int pieceIndex, int offset,
-                    const std::vector<uint8_t>& data);
-
-    // Called when piece is complete
-    void markCompleted(int pieceIndex);
-
-    int getPieceLength(int pieceIndex) const;
-    int getTotalPieces() const;
+    bool isPieceComplete(int piece);
+    bool verifyPiece(int piece);
 
 private:
     int totalPieces;
-    int standardBlockSize;
+    int pieceLength;
 
-    std::mutex lock;
-    std::set<int> completedPieces;
-
-    // For each piece, track received blocks
-    std::unordered_map<int, std::vector<uint8_t>> pieceBuffers;
-    std::unordered_map<int, std::set<int>> receivedOffsets;
+    std::vector<std::vector<char>> pieceData;
+    std::vector<int> downloaded;
+    std::mutex mtx;
 };

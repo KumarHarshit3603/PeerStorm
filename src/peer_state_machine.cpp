@@ -1,130 +1,176 @@
 #include "../include/peer_state_machine.h"
-#include <vector>
+#include "../include/sha1.h"
 #include <iostream>
-#include <mutex>
-#include <cstdint>
+#include <cstring>
 
-static std::mutex logMutex;
+
+#define BLOCK_SIZE 16384
 
 PeerStateMachine::PeerStateMachine(
-    const std::string& ip, int port,
-    SOCKET sock, PieceManager* pm
+    const std::string& ip,
+    int port,
+    const std::string& infoHash,
+    const std::string& peerId,
+    PieceManager& pieceManager
 )
-    : ip(ip), port(port), sock(sock), pieceManager(pm) {}
+    : ip(ip),
+      port(port),
+      infoHash(infoHash),
+      peerId(peerId),
+      pieceManager(pieceManager),
+      sock(INVALID_SOCKET) {}
 
-bool PeerStateMachine::recvAll(char* buf, int len) {
-    int total = 0;
-    while (total < len) {
-        int r = recv(sock, buf + total, len - total, 0);
-        if (r <= 0) return false;
-        total += r;
+void PeerStateMachine::run() {
+    if (!connectToPeer()) return;
+    if (!performHandshake()) return;
+    if (!receiveHandshake()) return;
+    if (!sendInterested()) return;
+
+    receiveLoop();
+    closeConnection();
+}
+
+bool PeerStateMachine::connectToPeer() {
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) return false;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr(ip.c_str());
+
+    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(sock);
+        return false;
     }
+
+    std::cout << "[+] Connected: " << ip << ":" << port << "\n";
     return true;
 }
 
-bool PeerStateMachine::recvMessage(
-        uint8_t &id,
-        std::vector<uint8_t> &payload) {
-    uint32_t len;
-    if(!recvAll((char*)&len, 4)) return false;
-    len = ntohl(len);
+bool PeerStateMachine::performHandshake() {
+    char handshake[68] = {0};
+    handshake[0] = 19;
+    memcpy(handshake + 1, "BitTorrent protocol", 19);
+    memcpy(handshake + 28, infoHash.data(), 20);
+    memcpy(handshake + 48, peerId.data(), 20);
 
-    if (len == 0) {
-        id = 255;
-        payload.clear();
-        return true;
+    return sendAll(handshake, 68);
+}
+
+bool PeerStateMachine::receiveHandshake() {
+    char response[68];
+    if (!recvExact(response, 68)) return false;
+
+    if (memcmp(response + 28, infoHash.data(), 20) != 0) {
+        std::cerr << "[!] Info hash mismatch\n";
+        return false;
     }
-    recvAll((char*)&id, 1);
-    payload.resize(len-1);
-    if(len>1) recvAll((char*)payload.data(), payload.size());
     return true;
 }
 
 bool PeerStateMachine::sendInterested() {
     uint32_t len = htonl(1);
     uint8_t id = 2;
-    send(sock, (char*)&len, 4, 0);
-    send(sock, (char*)&id, 1, 0);
-    return true;
+
+    char msg[5];
+    memcpy(msg, &len, 4);
+    msg[4] = id;
+
+    return sendAll(msg, 5);
 }
 
-bool PeerStateMachine::sendRequest(
-        int piece, int offset, int length) {
-    uint32_t len = htonl(13);
-    uint8_t id = 6;
-    uint8_t buf[17];
-    memcpy(buf+0, &id, 1);
-    memcpy(buf+1, &piece, 4);
-    memcpy(buf+5, &offset,4);
-    memcpy(buf+9, &length,4);
-
-    send(sock, (char*)&len, 4, 0);
-    send(sock, (char*)buf, 13, 0);
-    return true;
-}
-
-void PeerStateMachine::start() {
-    int timeout = 8000;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
-               (char*)&timeout, sizeof(timeout));
-
-    uint8_t id;
-    std::vector<uint8_t> payload;
-
-    bool unchoked = false;
-    bool interestedSent = false;
-
+bool PeerStateMachine::receiveLoop() {
     while (true) {
-        if (!recvMessage(id, payload)) break;
+        uint32_t lenNet;
+        if (!recvExact((char*)&lenNet, 4)) return false;
 
-        if (id == 5 && !interestedSent) {
-            sendInterested();
-            interestedSent = true;
-            continue;
+        uint32_t len = ntohl(lenNet);
+        if (len == 0) continue;
+
+        uint8_t id;
+        if (!recvExact((char*)&id, 1)) return false;
+
+        std::vector<char> payload(len - 1);
+        if (len > 1 && !recvExact(payload.data(), len - 1)) return false;
+
+        if (!handleMessage(id, payload)) return false;
+    }
+}
+
+bool PeerStateMachine::handleMessage(uint8_t id, const std::vector<char>& payload) {
+    switch (id) {
+        case 1: { // unchoke
+            int piece = pieceManager.getNextPiece(peerBitfield);
+            if (piece >= 0) {
+                sendRequest(piece, 0, BLOCK_SIZE);
+            }
+            break;
         }
-
-        if (id == 1) {
-            unchoked = true;
-        }
-
-        if (unchoked) {
-            // Request next block
-            BlockRequest br;
-            if (pieceManager->getNextBlock(br)) {
-                sendRequest(br.pieceIndex,
-                            br.offset,
-                            br.length);
-
-                // Wait for piece message
-                uint8_t recvId;
-                std::vector<uint8_t> recvPayload;
-                if(!recvMessage(recvId, recvPayload))
-                    break;
-
-                if (recvId == 7) {
-                    // piece message
-                    int idx = br.pieceIndex;
-                    int off = br.offset;
-                    pieceManager->storeBlock(idx, off, recvPayload);
-
-                    // check if piece done
-                    // (simple count logic)
-                    // assume only one block per piece for simplicity
-                    pieceManager->markCompleted(idx);
-
-                    {
-                        std::lock_guard<std::mutex> lk(logMutex);
-                        std::cout << "[PIECE] "
-                                  << idx << " from "
-                                  << ip << "\n";
-                    }
+        case 5: { // bitfield
+            peerBitfield.resize(payload.size() * 8);
+            for (size_t i = 0; i < payload.size(); i++) {
+                for (int b = 0; b < 8; b++) {
+                    peerBitfield[i * 8 + b] = payload[i] & (1 << (7 - b));
                 }
             }
+            break;
         }
-    }
+        case 7: { // piece
+            int index = ntohl(*(int*)&payload[0]);
+            int begin = ntohl(*(int*)&payload[4]);
 
-    {
-        std::lock_guard<std::mutex> lk(logMutex);
-        std::cout << "[DISCONNECTED] " << ip << " : " << port << "\n";
+            std::vector<char> block(payload.begin() + 8, payload.end());
+            pieceManager.storeBlock(index, begin, block);
+
+            if (pieceManager.isPieceComplete(index)) {
+                if (pieceManager.verifyPiece(index)) {
+                    std::cout << "[✔] Piece verified: " << index << "\n";
+                }
+            }
+            break;
+        }
+        default:
+            break;
     }
+    return true;
+}
+
+bool PeerStateMachine::sendRequest(int pieceIndex, int offset, int length) {
+    char msg[17];
+    uint32_t len = htonl(13);
+    uint8_t id = 6;
+
+    memcpy(msg, &len, 4);
+    msg[4] = id;
+    *(int*)(msg + 5) = htonl(pieceIndex);
+    *(int*)(msg + 9) = htonl(offset);
+    *(int*)(msg + 13) = htonl(length);
+
+    return sendAll(msg, 17);
+}
+
+bool PeerStateMachine::recvExact(char* buffer, int length) {
+    int received = 0;
+    while (received < length) {
+        int r = recv(sock, buffer + received, length - received, 0);
+        if (r <= 0) return false;
+        received += r;
+    }
+    return true;
+}
+
+bool PeerStateMachine::sendAll(const char* buffer, int length) {
+    int sent = 0;
+    while (sent < length) {
+        int s = send(sock, buffer + sent, length - sent, 0);
+        if (s <= 0) return false;
+        sent += s;
+    }
+    return true;
+}
+
+void PeerStateMachine::closeConnection() {
+    closesocket(sock);
+    std::cout << "[DISCONNECTED] " << ip << ":" << port << "\n";
 }

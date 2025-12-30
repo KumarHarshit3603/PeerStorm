@@ -1,6 +1,7 @@
 #pragma once
-#include <winsock2.h>
 #include <string>
+#include <vector>
+#include <winsock2.h>
 #include "piece_manager.h"
 
 class PeerStateMachine {
@@ -8,20 +9,36 @@ public:
     PeerStateMachine(
         const std::string& ip,
         int port,
-        SOCKET sock,
-        PieceManager* pm
+        const std::string& infoHash,
+        const std::string& peerId,
+        PieceManager& pieceManager
     );
 
-    void start();
+    void run();
 
 private:
-    bool recvAll(char* buf, int len);
-    bool recvMessage(uint8_t &id, std::vector<uint8_t> &payload);
-    bool sendInterested();
-    bool sendRequest(int piece, int offset, int length);
-
     std::string ip;
     int port;
+    std::string infoHash;
+    std::string peerId;
+
     SOCKET sock;
-    PieceManager* pieceManager;
+    PieceManager& pieceManager;
+
+    std::vector<bool> peerBitfield;
+
+    bool connectToPeer();
+    bool performHandshake();
+    bool receiveHandshake();
+
+    bool sendInterested();
+    bool sendRequest(int pieceIndex, int offset, int length);
+
+    bool receiveLoop();
+    bool handleMessage(uint8_t id, const std::vector<char>& payload);
+
+    bool recvExact(char* buffer, int length);
+    bool sendAll(const char* buffer, int length);
+
+    void closeConnection();
 };

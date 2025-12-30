@@ -134,10 +134,8 @@ int main(int argc, char* argv[]) {
         }
 
         /* ---------------- Piece Manager ---------------- */
-        PieceManager pieceManager(
-    static_cast<int>(meta.piece_count),
-    static_cast<int>(meta.piece_length)
-);
+        PieceManager pieceManager(meta.piece_count, meta.piece_length);
+
 
 
         /* ---------------- Peer Threads ---------------- */
@@ -158,40 +156,18 @@ int main(int argc, char* argv[]) {
                     return;
                 }
 
-                SOCKET sock = connectToPeer(
-                    p.ip,
-                    p.port,
-                    handshake
-                );
-
-                if (sock == INVALID_SOCKET) {
-                    {
-                        lock_guard<mutex> lock(coutMutex);
-                        cout << "Connection failed: "
-                             << p.ip << ":" << p.port << "\n";
-                    }
-                    activePeers--;
-                    return;
-                }
-
-                {
-                    lock_guard<mutex> lock(coutMutex);
-                    cout << "[+] Connected: "
-                         << p.ip << ":" << p.port << "\n";
-                }
-
                 PeerStateMachine psm(
                     p.ip,
                     p.port,
-                    sock,
-                    &pieceManager
+                    infoHashToString(meta.info_hash),
+                    peerId,
+                    pieceManager
                 );
 
-                psm.start();
-
-                closesocket(sock);
+                psm.run();
                 activePeers--;
             });
+
         }
 
         for (auto& t : peerThreads) {
